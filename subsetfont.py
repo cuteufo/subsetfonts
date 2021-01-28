@@ -98,6 +98,7 @@ import sys
 import time
 import json
 from pprint import pprint
+import re
 
 import fitz
 
@@ -515,13 +516,15 @@ def repl_fontnames(doc: fitz.Document):
         msg = ", ".join(msg)
         return msg
 
-
-    #infilename = sys.argv[1]
     font_list = set()
-    #doc = fitz.open(infilename)
     for i in range(len(doc)):
         for f in doc.getPageFontList(i, full=True):
             msg = ""
+
+            if re.match("[A-Z]{6}\+.+", f[3]):
+                # this font was a subset, bypass
+                continue
+
             subset, fontname = get_fontnames(doc, f)
 
             if f[1] == "n/a":
@@ -537,47 +540,23 @@ def repl_fontnames(doc: fitz.Document):
             if subset:
                 msg += ", subset font"
             font_list.add((fontname, msg))
-    """  # <<<<< cuteufo: we don't need JSON output
-    font_list = list(font_list)
-    font_list.sort(key=lambda x: x[0])
-    #outname = infilename + "-fontnames.json"
-    #out = open(outname, "w")
-    outlist = []
-    for fontname, msg in font_list:
-        msg1 = "keep"
-        outlist.append({"oldfont": fontname, "newfont": msg1, "info": msg})
-    
-    json.dump(outlist, out, indent=2)
-    out.close()
-    """
+
 
 
 def subset_fonts(indoc: fitz.Document):          # <<<<<<<<<<< cuteufo: interface for this module
     # ------------------
-    # main
+    # main interface
     # ------------------
-    #infilename = sys.argv[1]
-    #indoc = fitz.open(infilename)  # input PDF
-
-    #repl_filename = infilename + "-fontnames.json"
-    #if os.path.exists(repl_filename):
-    #    build_repl_table(indoc, repl_filename)
     repl_fontnames(indoc)   # <<<<<<<<<<<<<<<<<<<<<<<<< cuteufo: make up font_buffers and new_fontnames
 
     if new_fontnames == {}:
         # sys.exit("\n***** There are no fonts to replace. *****")       # <<<<<<<< cuteufo: don't exit, return
         return
-    print(
-        "Processing PDF '%s' with %i page%s.\n"
-        % (indoc.name, indoc.pageCount, "s" if indoc.pageCount > 1 else "")
-    )
-
-    t0 = time.perf_counter()
+    
     # the following flag prevents images from being extracted:
     extr_flags = fitz.TEXT_PRESERVE_LIGATURES | fitz.TEXT_PRESERVE_WHITESPACE
 
     # Phase 1
-    print("Phase 1: Create sets of used unicodes per new font.")
     for page in indoc:
         fontrefs = get_page_fontrefs(page)
         if fontrefs == {}:  # page has no fonts to replace
@@ -597,36 +576,18 @@ def subset_fonts(indoc: fitz.Document):          # <<<<<<<<<<< cuteufo: interfac
                         subset.add(ord(c))  # add any new unicode values
                     font_subsets[new_fontname] = subset  # store back extended set
 
-
-    t0_1 = time.perf_counter()
-    print("End of phase 1, %g seconds.\n" % round(t0_1 - t0, 2))
-    print()
-    print("Font replacement overview:") 
-
-    max_len = max([len(k) for k in new_fontnames.keys()]) + 1
-    for k in new_fontnames.keys():
-        print(k.rjust(max_len), "replaced by: %s." % new_fontnames[k])
-    print()
-    print("Building font subsets:")
     for fontname in font_subsets.keys():
-        msg = "Used %i glyphs of font '%s'." % (len(font_subsets[fontname]), fontname)
         old_buffer = font_buffers[fontname]
 
         new_buffer = build_subset(old_buffer, font_subsets[fontname])
         if new_buffer is not None:
-            s = round((len(old_buffer) - len(new_buffer)) / 1024)
-            msg += " %g KB saved." % s
             font_buffers[fontname] = new_buffer
         else:
-            msg += " Cannot subset!"
-        print(msg)
+            del font_buffers[fontname] # failure of subset, remove this fontname from 
+            del new_fontnames[fontname] # font_buffers and new_fontnames
         del old_buffer
 
-    t0_2 = time.perf_counter()
-    print("Font subsets built, %g seconds." % round(t0_2 - t0_1, 2))
-    print()
     # Phase 2
-    print("Phase 2: rebuild document.")
     for page in indoc:  
         # extract text again
         blocks = page.getText("dict", flags=extr_flags)["blocks"]
@@ -651,7 +612,9 @@ def subset_fonts(indoc: fitz.Document):          # <<<<<<<<<<< cuteufo: interfac
                     new_fontname = get_new_fontname(span["font"])
                     if new_fontname is None:  # do not replace this font
                         continue
-
+                    if font_buffers[new_fontname] is None: 
+                        # do not replace this font due to failure of fontTools
+                        continue
                     font = fitz.Font(fontbuffer=font_buffers[new_fontname]) 
                     text = span["text"].replace(chr(0xFFFD), chr(0xB6))
                     # guard against non-utf8 characters
@@ -675,8 +638,7 @@ def subset_fonts(indoc: fitz.Document):          # <<<<<<<<<<< cuteufo: interfac
                             fontsize=resize(span, font),  # use adjusted fontsize
                         )
                     except Exception as err:
-                        print("page %i exception:" % page.number, text)
-                        print(f"main() exception: {err}")
+                        print(f"page {page.number} exception: {err}")
 
         # now write all text stored in the list of text writers
         for color in textwriters.keys():  # output the stored text per color
@@ -685,13 +647,4 @@ def subset_fonts(indoc: fitz.Document):          # <<<<<<<<<<< cuteufo: interfac
             tw.writeText(page, color=outcolor)
 
         clean_fontnames(page)
-
-    t1 = time.perf_counter()
-    print("End of phase 2, %g seconds" % round(t1 - t0_2, 2))
-    print("Total duration %g seconds" % round(t1 - t0, 2))
-    #indoc.save(       # <<<<<<<<<<<<<<<<<<<<<<<<<<<< cuteufo: leave save() for caller
-    #    indoc.name.replace(".pdf", "-new.pdf"),
-    #    garbage=4,
-    #)
-
 
