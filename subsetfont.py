@@ -528,11 +528,12 @@ def repl_fontnames(doc: fitz.Document):
             subset, fontname = get_fontnames(doc, f)
 
             if f[1] == "n/a":
-                msg = "Not embedded!"
+                #msg = "Not embedded!"
+                continue
             else:
                 extr = doc.extractFont(f[0])
                 font = fitz.Font(fontbuffer=extr[-1])
-                msg = make_msg(font)
+                #msg = make_msg(font)
                 for _fontname in fontname:   #  <<<<< cuteufo: build up font_buffers and new_fontnames dict here
                     font_buffers[_fontname] = extr[3]
                     new_fontnames[_fontname] = _fontname # <<<<< cuteufo
